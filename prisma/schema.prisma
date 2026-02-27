@@ -1,0 +1,42 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Watchlist {
+  id        Int      @id @default(autoincrement())
+  ticker    String   @unique
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("watchlist")
+}
+
+model CachedStock {
+  id        Int      @id @default(autoincrement())
+  ticker    String   @unique
+  data      Json
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("cached_stocks")
+}
+
+model StockProfile {
+  ticker            String   @id
+  name              String?
+  sector            String?
+  industry          String?
+  country           String?
+  marketCap         Float?   @map("market_cap")
+  employees         Int?
+  sharesOutstanding Float?   @map("shares_outstanding")
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("stock_profiles")
+}
