@@ -19,6 +19,13 @@ app.use(cors({
 app.use(express.json());
 
 // Routes
+app.get('/', (_req, res) => {
+    res.json({
+        message: 'EdgeScanner API is running',
+        endpoints: ['/api/stocks', '/api/scanner', '/api/watchlist', '/api/intraday', '/api/health']
+    });
+});
+
 app.use('/api/stocks', stockRoutes);
 app.use('/api/scanner', scannerRoutes);
 app.use('/api/watchlist', watchlistRoutes);
