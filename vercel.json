@@ -9,10 +9,7 @@
     "functions": {
         "api/index.ts": {
             "runtime": "vercel-node@latest",
-            "includeFiles": [
-                "src/**",
-                "prisma/**"
-            ]
+            "includeFiles": "prisma/schema.prisma"
         }
     }
 }
