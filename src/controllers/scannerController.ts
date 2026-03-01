@@ -36,6 +36,7 @@ interface ComputedDay {
 
 interface ScanResult {
     ticker: string;
+    gapDate?: string;  // YYYY-MM-DD of the gap day
     // Fundamental Data
     name?: string;
     sector?: string;
@@ -58,10 +59,10 @@ interface ScanResult {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-function getLastBusinessDays(count: number): string[] {
+function getLastBusinessDays(count: number, fromDate?: Date): string[] {
     const dates: string[] = [];
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
+    const d = fromDate ? new Date(fromDate) : new Date();
+    if (!fromDate) d.setDate(d.getDate() - 1);
     while (dates.length < count) {
         if (d.getDay() !== 0 && d.getDay() !== 6) {
             dates.push(d.toISOString().split('T')[0]);
@@ -69,6 +70,53 @@ function getLastBusinessDays(count: number): string[] {
         d.setDate(d.getDate() - 1);
     }
     return dates;
+}
+
+// Get all business days between two dates (inclusive)
+function getBusinessDaysBetween(from: string, to: string): string[] {
+    const dates: string[] = [];
+    const start = new Date(from + 'T00:00:00');
+    const end = new Date(to + 'T00:00:00');
+    const d = new Date(end);
+    while (d >= start) {
+        if (d.getDay() !== 0 && d.getDay() !== 6) {
+            dates.push(d.toISOString().split('T')[0]);
+        }
+        d.setDate(d.getDate() - 1);
+    }
+    return dates; // newest first
+}
+
+function getDateRangeFromPreset(preset: string): { from: string; to: string } {
+    const now = new Date();
+    const to = new Date(now);
+    to.setDate(to.getDate() - 1); // yesterday
+    // Skip weekends for 'to'
+    while (to.getDay() === 0 || to.getDay() === 6) to.setDate(to.getDate() - 1);
+
+    const from = new Date(to);
+    switch (preset) {
+        case 'today':
+            return { from: now.toISOString().split('T')[0], to: now.toISOString().split('T')[0] };
+        case 'yesterday':
+            return { from: to.toISOString().split('T')[0], to: to.toISOString().split('T')[0] };
+        case 'lastWeek':
+            from.setDate(from.getDate() - 7);
+            break;
+        case 'last2Weeks':
+            from.setDate(from.getDate() - 14);
+            break;
+        case 'lastMonth':
+            from.setMonth(from.getMonth() - 1);
+            break;
+        case 'last3Months':
+            from.setMonth(from.getMonth() - 3);
+            break;
+        default:
+            // default: last 1 day (just yesterday)
+            break;
+    }
+    return { from: from.toISOString().split('T')[0], to: to.toISOString().split('T')[0] };
 }
 
 async function fetchGroupedDay(date: string): Promise<Record<string, DayBar>> {
@@ -361,42 +409,83 @@ export const scanStocks = async (req: Request, res: Response): Promise<void> => 
         const limit = parseInt(req.query.limit as string) || 50;
         const page = parseInt(req.query.page as string) || 1;
 
-        // Fetch last 5 business days (need 5 to compute 4 days with gaps)
-        const cacheKey = 'scanner_full';
+        // ── Date parameters ─────────────────────────────────────────
+        const gapDate = req.query.gapDate as string | undefined;      // specific date: "2026-02-25"
+        const dateFrom = req.query.dateFrom as string | undefined;    // range start
+        const dateTo = req.query.dateTo as string | undefined;        // range end
+        const dateRange = req.query.dateRange as string | undefined;  // preset: "lastWeek", "lastMonth"
+
+        // Determine which gap days to scan
+        let gapDays: string[];
+        if (gapDate) {
+            // Single specific date
+            gapDays = [gapDate];
+        } else if (dateFrom && dateTo) {
+            // Custom range
+            gapDays = getBusinessDaysBetween(dateFrom, dateTo);
+        } else if (dateRange) {
+            // Preset range
+            const { from, to } = getDateRangeFromPreset(dateRange);
+            gapDays = getBusinessDaysBetween(from, to);
+        } else {
+            // Default: just yesterday (most recent business day)
+            gapDays = getLastBusinessDays(1);
+        }
+
+        // For each gap day, we need 4 additional preceding business days
+        // Collect all unique dates needed
+        const allDatesNeeded = new Set<string>();
+        const gapDayContextMap: Record<string, string[]> = {};
+        for (const gd of gapDays) {
+            const contextDays = getLastBusinessDays(5, new Date(gd + 'T12:00:00'));
+            // contextDays[0] = gapDay itself (or the day before if gd is today)
+            // We need: gapDay + 4 preceding days
+            const fullDays = [gd, ...contextDays.filter(d => d !== gd).slice(0, 4)];
+            gapDayContextMap[gd] = fullDays;
+            fullDays.forEach(d => allDatesNeeded.add(d));
+        }
+
+        const cacheKey = `scanner_${Array.from(allDatesNeeded).sort().join('_')}`;
         let scanData: ScanResult[] | undefined = getFromCache<ScanResult[]>(cacheKey, true);
 
         if (!scanData) {
-            const dates = getLastBusinessDays(5);
-            // dates[0] = most recent, dates[4] = oldest
-
-            // Fetch days sequentially with delay to avoid rate limits
-            const dayMaps: Record<string, DayBar>[] = [];
-            for (const d of dates) {
-                dayMaps.push(await fetchGroupedDay(d));
-                // Small delay between uncached requests to respect rate limits
+            // Fetch all unique dates
+            const dateList = Array.from(allDatesNeeded).sort();
+            const dateFetchMap: Record<string, Record<string, DayBar>> = {};
+            for (const d of dateList) {
+                dateFetchMap[d] = await fetchGroupedDay(d);
                 await new Promise((r) => setTimeout(r, 250));
             }
 
-            // dayMaps[0] = gap day, dayMaps[1] = prev day, etc.
             scanData = [];
-            const gapDayTickers = Object.keys(dayMaps[0]);
 
-            for (const ticker of gapDayTickers) {
-                const d0 = dayMaps[0][ticker];
-                const d1 = dayMaps[1]?.[ticker];
-                const d2 = dayMaps[2]?.[ticker];
-                const d3 = dayMaps[3]?.[ticker];
-                const d4 = dayMaps[4]?.[ticker];
+            for (const gd of gapDays) {
+                const days = gapDayContextMap[gd];
+                const d0map = dateFetchMap[days[0]] || {};
+                const d1map = dateFetchMap[days[1]] || {};
+                const d2map = dateFetchMap[days[2]] || {};
+                const d3map = dateFetchMap[days[3]] || {};
+                const d4map = dateFetchMap[days[4]] || {};
 
-                if (!d0 || d0.close <= 0) continue;
+                const gapDayTickers = Object.keys(d0map);
+                for (const ticker of gapDayTickers) {
+                    const bar0 = d0map[ticker];
+                    const bar1 = d1map[ticker];
+                    const bar2 = d2map[ticker];
+                    const bar3 = d3map[ticker];
+                    const bar4 = d4map[ticker];
 
-                scanData.push({
-                    ticker,
-                    gapDay: computeDay(d0, d1 || null),
-                    prevDay: d1 ? computeDay(d1, d2 || null) : computeDay(d0, null),
-                    day2: d2 ? computeDay(d2, d3 || null) : computeDay(d0, null),
-                    day3: d3 ? computeDay(d3, d4 || null) : computeDay(d0, null),
-                });
+                    if (!bar0 || bar0.close <= 0) continue;
+
+                    scanData.push({
+                        ticker,
+                        gapDate: gd,
+                        gapDay: computeDay(bar0, bar1 || null),
+                        prevDay: bar1 ? computeDay(bar1, bar2 || null) : computeDay(bar0, null),
+                        day2: bar2 ? computeDay(bar2, bar3 || null) : computeDay(bar0, null),
+                        day3: bar3 ? computeDay(bar3, bar4 || null) : computeDay(bar0, null),
+                    });
+                }
             }
 
             setInCache(cacheKey, scanData, true, 120);
@@ -427,6 +516,8 @@ export const scanStocks = async (req: Request, res: Response): Promise<void> => 
                 totalPages,
                 sort,
                 sortDir,
+                gapDays: gapDays,
+                dateRange: dateRange || (gapDate ? 'single' : (dateFrom && dateTo ? 'custom' : 'default')),
             },
         });
     } catch (error: any) {
