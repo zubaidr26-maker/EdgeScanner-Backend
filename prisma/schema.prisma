@@ -9,6 +9,32 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ── Multiple Watchlists ────────────────────────────────────
+model WatchlistGroup {
+  id        Int             @id @default(autoincrement())
+  name      String          @default("My Watchlist")
+  color     String          @default("#6366f1")
+  icon      String          @default("star")
+  createdAt DateTime        @default(now()) @map("created_at")
+  updatedAt DateTime        @default(now()) @updatedAt @map("updated_at")
+  items     WatchlistItem[]
+
+  @@map("watchlist_groups")
+}
+
+model WatchlistItem {
+  id        Int            @id @default(autoincrement())
+  ticker    String
+  name      String?
+  groupId   Int            @map("group_id")
+  group     WatchlistGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now()) @map("created_at")
+
+  @@unique([ticker, groupId])
+  @@map("watchlist_items")
+}
+
+// Keep the old table to avoid migration issues (we'll migrate data)
 model Watchlist {
   id        Int      @id @default(autoincrement())
   ticker    String   @unique
