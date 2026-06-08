@@ -97,8 +97,15 @@ export const getIntradayMovers = async (req: Request, res: Response): Promise<vo
         const sortField = (sort as string) || 'changePct';
         const sortDirection = (sortDir as string) || 'desc';
 
-        // Build cache key
-        const cacheKey = `intraday_movers_${dateStr}_${fHour}:${fMinute}_${tHour}:${tMinute}_${dir}_${minChg}_${ts}_${mult}`;
+        // Daily (Scanner) filters for cross-filtering
+        const dailyVolumeMin = req.query.dailyVolumeMin ? parseInt(req.query.dailyVolumeMin as string) : 50000;
+        const dailyChangeMin = req.query.dailyChangeMin ? parseFloat(req.query.dailyChangeMin as string) : undefined;
+        const dailyChangeMax = req.query.dailyChangeMax ? parseFloat(req.query.dailyChangeMax as string) : undefined;
+        const dailyCloseMin = req.query.dailyCloseMin ? parseFloat(req.query.dailyCloseMin as string) : 1;
+        const dailyCloseMax = req.query.dailyCloseMax ? parseFloat(req.query.dailyCloseMax as string) : undefined;
+
+        // Build cache key containing all daily parameters to ensure unique cache namespaces
+        const cacheKey = `intraday_movers_${dateStr}_${fHour}:${fMinute}_${tHour}:${tMinute}_${dir}_${minChg}_${ts}_${mult}_dv:${dailyVolumeMin}_dc:${dailyChangeMin || ''}:${dailyChangeMax || ''}_dcl:${dailyCloseMin || ''}:${dailyCloseMax || ''}`;
         let movers: IntradayMover[] | undefined = getFromCache<IntradayMover[]>(cacheKey, false);
 
         if (!movers) {
@@ -128,12 +135,30 @@ export const getIntradayMovers = async (req: Request, res: Response): Promise<vo
                 }
             }
 
-            // Step 2: Filter tickers by broad criteria (price > $1, volume > 50k)
+            // Step 2: Filter tickers by broad criteria (price > $1, volume > 50k) and daily scanner criteria, then select top 100 volatile
             const candidateTickers = Object.entries(groupedData as Record<string, any>)
-                .filter(([_, bar]) => bar.close > 1 && bar.volume > 50000)
-                .sort((a, b) => b[1].volume - a[1].volume)
-                .slice(0, 500)  // Top 500 by volume as candidates
-                .map(([ticker]) => ticker);
+                .filter(([_, bar]) => {
+                    // Close price checks
+                    if (bar.close <= dailyCloseMin) return false;
+                    if (dailyCloseMax !== undefined && bar.close > dailyCloseMax) return false;
+
+                    // Volume check
+                    if (bar.volume < dailyVolumeMin) return false;
+
+                    // Daily change % checks
+                    const dailyChange = bar.open ? ((bar.close - bar.open) / bar.open * 100) : 0;
+                    if (dailyChangeMin !== undefined && dailyChange < dailyChangeMin) return false;
+                    if (dailyChangeMax !== undefined && dailyChange > dailyChangeMax) return false;
+
+                    return true;
+                })
+                .map(([ticker, bar]) => {
+                    const volatility = bar.open ? ((bar.high - bar.low) / bar.open * 100) : 0;
+                    return { ticker, volatility };
+                })
+                .sort((a, b) => b.volatility - a.volatility)
+                .slice(0, 100)  // Scan the top 100 most volatile tickers matching our daily filters
+                .map(item => item.ticker);
 
             // Step 3: Build the from/to timestamps in ET
             // Create date strings for intraday query
@@ -142,7 +167,7 @@ export const getIntradayMovers = async (req: Request, res: Response): Promise<vo
             const toDate = dateStr;
 
             // Step 4: Fetch intraday bars for top tickers in batches
-            const BATCH_SIZE = 10;
+            const BATCH_SIZE = 20;
             movers = [];
 
             for (let i = 0; i < candidateTickers.length; i += BATCH_SIZE) {
@@ -261,7 +286,7 @@ export const getIntradayMovers = async (req: Request, res: Response): Promise<vo
 
                 // Small delay between batches to avoid rate limiting
                 if (i + BATCH_SIZE < candidateTickers.length) {
-                    await new Promise(r => setTimeout(r, 200));
+                    await new Promise(r => setTimeout(r, 100));
                 }
             }
 

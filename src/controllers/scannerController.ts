@@ -494,6 +494,100 @@ export const scanStocks = async (req: Request, res: Response): Promise<void> => 
         // Apply filters
         let filtered = applyFilters(scanData, numeric, directions);
 
+        // Intraday cross-filters (Filter daily gap results by how they behaved intraday)
+        const {
+            intraFromHour,
+            intraToHour,
+            intraFromMinute,
+            intraToMinute,
+            intraMinChange,
+            intraDirection,
+        } = req.query;
+
+        if (intraMinChange !== undefined || intraDirection !== undefined) {
+            const fHour = intraFromHour !== undefined ? parseInt(intraFromHour as string) : 9;
+            const tHour = intraToHour !== undefined ? parseInt(intraToHour as string) : 16;
+            const fMinute = intraFromMinute !== undefined ? parseInt(intraFromMinute as string) : 30;
+            const tMinute = intraToMinute !== undefined ? parseInt(intraToMinute as string) : 0;
+            const minChg = parseFloat(intraMinChange as string) || 0;
+            const dir = (intraDirection as string) || 'both';
+
+            // Cap at 100 items to keep requests within safe limits
+            const candidates = filtered.slice(0, 100);
+            const verifiedMovers: ScanResult[] = [];
+
+            const BATCH_SIZE = 15;
+            for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
+                const batch = candidates.slice(i, i + BATCH_SIZE);
+                const batchPromises = batch.map(async (item) => {
+                    const dateStr = item.gapDate || gapDays[0];
+                    const barCacheKey = `intraday_bars_${item.ticker}_${dateStr}_minute_5`;
+                    let bars: any[] | undefined = getFromCache(barCacheKey);
+
+                    if (!bars) {
+                        try {
+                            const data = await massiveApi.getHistoricalData(
+                                item.ticker,
+                                5,
+                                'minute',
+                                dateStr,
+                                dateStr,
+                                50000
+                            );
+                            bars = (data.results || []).map((bar: any) => ({
+                                timestamp: bar.t,
+                                open: bar.o,
+                                close: bar.c,
+                            }));
+                            setInCache(barCacheKey, bars, false, 3600);
+                        } catch (err) {
+                            return null;
+                        }
+                    }
+
+                    if (!bars || bars.length === 0) return null;
+
+                    // Filter to selected time range in Eastern Time (ET)
+                    const filteredBars = bars.filter((bar: any) => {
+                        const d = new Date(bar.timestamp);
+                        const etStr = d.toLocaleString('en-US', { timeZone: 'America/New_York' });
+                        const etDate = new Date(etStr);
+                        const h = etDate.getHours();
+                        const m = etDate.getMinutes();
+                        const totalMinutes = h * 60 + m;
+                        const fromTotal = fHour * 60 + fMinute;
+                        const toTotal = tHour * 60 + tMinute;
+                        return totalMinutes >= fromTotal && totalMinutes <= toTotal;
+                    });
+
+                    if (filteredBars.length < 2) return null;
+
+                    const startPrice = filteredBars[0].open;
+                    const endPrice = filteredBars[filteredBars.length - 1].close;
+                    const changePct = startPrice ? ((endPrice - startPrice) / startPrice) * 100 : 0;
+                    const moveDirection: 'up' | 'down' = changePct >= 0 ? 'up' : 'down';
+
+                    // Apply intraday direction filter
+                    if (dir === 'up' && moveDirection !== 'up') return null;
+                    if (dir === 'down' && moveDirection !== 'down') return null;
+
+                    // Apply intraday min change filter
+                    if (Math.abs(changePct) < minChg) return null;
+
+                    return item;
+                });
+
+                const batchResults = await Promise.all(batchPromises);
+                verifiedMovers.push(...batchResults.filter((item): item is ScanResult => item !== null));
+
+                if (i + BATCH_SIZE < candidates.length) {
+                    await new Promise(r => setTimeout(r, 100));
+                }
+            }
+
+            filtered = verifiedMovers;
+        }
+
         // Sort
         filtered = sortResults(filtered, sort, sortDir);
 

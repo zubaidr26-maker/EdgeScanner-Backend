@@ -134,6 +134,102 @@ class MassiveApiService {
             throw error;
         }
     }
+
+    // Get related companies (competitors) - Supported on Starter
+    async getRelatedCompanies(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get(`/v1/related-companies/${ticker.toUpperCase()}`);
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error fetching related companies for ${ticker}:`, error.message);
+            throw error;
+        }
+    }
+
+    // Get ticker news - Supported on Starter
+    async getTickerNews(ticker: string, limit: number = 10): Promise<any> {
+        try {
+            const response = await this.client.get('/v2/reference/news', {
+                params: {
+                    ticker: ticker.toUpperCase(),
+                    limit,
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error fetching news for ${ticker}:`, error.message);
+            throw error;
+        }
+    }
+
+    // Get ticker financials - Supported on Starter
+    async getFinancials(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get('/vx/reference/financials', {
+                params: {
+                    ticker: ticker.toUpperCase(),
+                    limit: 5,
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error fetching financials for ${ticker}:`, error.message);
+            throw error;
+        }
+    }
+
+    // Get dividends history - Supported on Starter
+    async getDividends(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get('/v3/reference/dividends', {
+                params: {
+                    ticker: ticker.toUpperCase(),
+                    limit: 10,
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error fetching dividends for ${ticker}:`, error.message);
+            throw error;
+        }
+    }
+
+    // Get stock splits history - Supported on Starter
+    async getStockSplits(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get('/v3/reference/stock_splits', {
+                params: {
+                    ticker: ticker.toUpperCase(),
+                    limit: 10,
+                },
+            });
+            return response.data;
+        } catch (error: any) {
+            console.error(`Error fetching stock splits for ${ticker}:`, error.message);
+            throw error;
+        }
+    }
+
+    // Last trade & quote (Real-time indicators) - Might be restricted on Starter, so we wrap with try/catch
+    async getLastTrade(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get(`/v2/last/trade/${ticker.toUpperCase()}`);
+            return response.data;
+        } catch (error: any) {
+            console.warn(`Last trade not available for ${ticker} on Starter plan:`, error.message);
+            throw error;
+        }
+    }
+
+    async getLastQuote(ticker: string): Promise<any> {
+        try {
+            const response = await this.client.get(`/v2/last/quote/${ticker.toUpperCase()}`);
+            return response.data;
+        } catch (error: any) {
+            console.warn(`Last quote not available for ${ticker} on Starter plan:`, error.message);
+            throw error;
+        }
+    }
 }
 
 export const massiveApi = new MassiveApiService();

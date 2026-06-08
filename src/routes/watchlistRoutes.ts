@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import {
     getLists, createList, updateList, deleteList,
-    addItem, removeItem, quickAdd, getTickerLists,
+    addItem, removeItem, updateItem, quickAdd, getTickerLists,
     getWatchlist, addToWatchlist, removeFromWatchlist,
 } from '../controllers/watchlistController';
 
@@ -15,6 +15,7 @@ router.delete('/lists/:id', deleteList);
 
 // Items within a list
 router.post('/lists/:id/items', addItem);
+router.patch('/lists/:id/items/:ticker', updateItem);
 router.delete('/lists/:id/items/:ticker', removeItem);
 
 // Quick add (no need to know the list id from the frontend)

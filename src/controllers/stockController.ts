@@ -280,6 +280,235 @@ export const getMarketStatus = async (_req: Request, res: Response): Promise<voi
     }
 };
 
+// ── Related Companies ──────────────────────────────────────────────────
+export const getStockPeers = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `peers_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        const data = await massiveApi.getRelatedCompanies(ticker);
+        const peers = data.results || [];
+        setInCache(cacheKey, peers);
+        res.json({ success: true, data: peers });
+    } catch (error: any) {
+        res.json({ success: true, data: [], error: 'Peers not available' });
+    }
+};
+
+// ── Ticker News & Sentiment ───────────────────────────────────────────
+export const getStockNews = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `news_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        const data = await massiveApi.getTickerNews(ticker, 6);
+        const news = (data.results || []).map((item: any) => ({
+            id: item.id,
+            title: item.title,
+            author: item.author,
+            published_utc: item.published_utc,
+            article_url: item.article_url,
+            image_url: item.image_url,
+            description: item.description,
+            // Parse sentiment if present
+            sentiment: item.insights?.find((ins: any) => ins.ticker === ticker.toUpperCase())?.sentiment || 'neutral'
+        }));
+
+        setInCache(cacheKey, news);
+        res.json({ success: true, data: news });
+    } catch (error: any) {
+        res.json({ success: true, data: [], error: 'News not available' });
+    }
+};
+
+// ── Financials ────────────────────────────────────────────────────────
+export const getStockFinancials = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `financials_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        const data = await massiveApi.getFinancials(ticker);
+        const financials = (data.results || []).map((item: any) => {
+            const fd = item.financials;
+            return {
+                fiscal_period: item.fiscal_period,
+                fiscal_year: item.fiscal_year,
+                start_date: item.start_date,
+                end_date: item.end_date,
+                revenue: fd?.income_statement?.revenues?.value || 0,
+                net_income: fd?.income_statement?.net_income_loss?.value || 0,
+                operating_income: fd?.income_statement?.operating_income_loss?.value || 0,
+                assets: fd?.balance_sheet?.assets?.value || 0,
+                liabilities: fd?.balance_sheet?.liabilities?.value || 0,
+                equity: fd?.balance_sheet?.equity?.value || 0,
+                operating_cash_flow: fd?.cash_flow_statement?.net_cash_flow_from_operating_activities?.value || 0,
+            };
+        });
+
+        setInCache(cacheKey, financials);
+        res.json({ success: true, data: financials });
+    } catch (error: any) {
+        res.json({ success: true, data: [], error: 'Financials not available' });
+    }
+};
+
+// ── Dividends & Stock Splits ──────────────────────────────────────────
+export const getStockEvents = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `events_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        const [divRes, splitRes] = await Promise.allSettled([
+            massiveApi.getDividends(ticker),
+            massiveApi.getStockSplits(ticker),
+        ]);
+
+        const dividends = divRes.status === 'fulfilled' ? (divRes.value.results || []).map((d: any) => ({
+            cash_amount: d.cash_amount,
+            declaration_date: d.declaration_date,
+            ex_dividend_date: d.ex_dividend_date,
+            pay_date: d.pay_date,
+            frequency: d.frequency,
+        })) : [];
+
+        const splits = splitRes.status === 'fulfilled' ? (splitRes.value.results || []).map((s: any) => ({
+            execution_date: s.execution_date,
+            split_from: s.split_from,
+            split_to: s.split_to,
+        })) : [];
+
+        const result = { dividends, splits };
+        setInCache(cacheKey, result);
+        res.json({ success: true, data: result });
+    } catch (error: any) {
+        res.json({ success: true, data: { dividends: [], splits: [] }, error: 'Events not available' });
+    }
+};
+
+// ── Realtime Quote / Bid-Ask ──────────────────────────────────────────
+export const getStockRealtime = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `realtime_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        const [tradeRes, quoteRes] = await Promise.allSettled([
+            massiveApi.getLastTrade(ticker),
+            massiveApi.getLastQuote(ticker),
+        ]);
+
+        const trade = tradeRes.status === 'fulfilled' ? tradeRes.value.results : null;
+        const quote = quoteRes.status === 'fulfilled' ? quoteRes.value.results : null;
+
+        const result = {
+            price: trade?.p || null,
+            size: trade?.s || null,
+            timestamp: trade?.t ? Math.floor(trade.t / 1000) : null,
+            bid: quote?.p || null,
+            bidSize: quote?.s || null,
+            ask: quote?.P || null,
+            askSize: quote?.S || null,
+        };
+
+        // Cache briefly (10 seconds) for near realtime performance
+        setInCache(cacheKey, result, true, 10);
+        res.json({ success: true, data: result });
+    } catch (error: any) {
+        res.json({ success: true, data: null, error: 'Realtime quote not available on Starter plan' });
+    }
+};
+
+// ── Technical Indicators (Local calculations on Starter plan) ─────────
+export const getStockTechnicals = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const ticker = Array.isArray(req.params.ticker) ? req.params.ticker[0] : req.params.ticker;
+        const cacheKey = `technicals_calc_${ticker}`;
+        const cached = getFromCache<any>(cacheKey);
+        if (cached) {
+            res.json({ success: true, data: cached, source: 'cache' });
+            return;
+        }
+
+        // Fetch last 40 daily bars to calculate RSI(14) and SMA(20)
+        const to = getTodayDate();
+        const from = new Date(Date.now() - 60 * 86400000).toISOString().split('T')[0]; // 60 days
+        const rawBars = await massiveApi.getHistoricalData(ticker, 1, 'day', from, to);
+        const bars = rawBars.results || [];
+
+        if (bars.length < 20) {
+            res.json({
+                success: true,
+                data: { sma20: null, rsi14: null, message: 'Insufficient data for indicators' }
+            });
+            return;
+        }
+
+        // 1. Calculate SMA 20
+        const last20 = bars.slice(-20);
+        const sma20 = last20.reduce((sum: number, bar: any) => sum + bar.c, 0) / 20;
+
+        // 2. Calculate RSI 14
+        let avgGain = 0;
+        let avgLoss = 0;
+
+        // Calculate initial change for first 14 periods
+        for (let i = 1; i <= 14; i++) {
+            const change = bars[i].c - bars[i - 1].c;
+            if (change > 0) avgGain += change;
+            else avgLoss += Math.abs(change);
+        }
+        avgGain /= 14;
+        avgLoss /= 14;
+
+        // Wilder's smoothing technique for remaining periods
+        for (let i = 15; i < bars.length; i++) {
+            const change = bars[i].c - bars[i - 1].c;
+            const gain = change > 0 ? change : 0;
+            const loss = change < 0 ? Math.abs(change) : 0;
+            avgGain = (avgGain * 13 + gain) / 14;
+            avgLoss = (avgLoss * 13 + loss) / 14;
+        }
+
+        const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+        const rsi14 = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+
+        const result = {
+            sma20: parseFloat(sma20.toFixed(2)),
+            rsi14: parseFloat(rsi14.toFixed(2)),
+            price: bars[bars.length - 1].c,
+        };
+
+        setInCache(cacheKey, result);
+        res.json({ success: true, data: result });
+    } catch (error: any) {
+        res.json({ success: true, data: { sma20: null, rsi14: null }, error: 'Technicals calculation error' });
+    }
+};
+
 // Helper functions
 function getTodayDate(): string {
     return new Date().toISOString().split('T')[0];
@@ -290,3 +519,4 @@ function getDefaultFromDate(): string {
     date.setFullYear(date.getFullYear() - 1);
     return date.toISOString().split('T')[0];
 }
+

@@ -97,7 +97,7 @@ export const deleteList = async (req: Request, res: Response): Promise<void> => 
 export const addItem = async (req: Request, res: Response): Promise<void> => {
     try {
         const groupId = parseInt(req.params.id as string);
-        const { ticker, name } = req.body;
+        const { ticker, name, notes } = req.body;
 
         if (!ticker) {
             res.status(400).json({ success: false, error: 'Ticker is required' });
@@ -125,6 +125,7 @@ export const addItem = async (req: Request, res: Response): Promise<void> => {
                 ticker: ticker.toUpperCase(),
                 name: name || ticker.toUpperCase(),
                 groupId,
+                ...(notes !== undefined && { notes }),
             },
         });
 
@@ -153,10 +154,35 @@ export const removeItem = async (req: Request, res: Response): Promise<void> => 
     }
 };
 
+// ── Update an item (notes / name) ──────────────────────────────────
+export const updateItem = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const groupId = parseInt(req.params.id as string);
+        const ticker = (req.params.ticker as string).toUpperCase();
+        const { notes, name } = req.body;
+
+        const item = await prisma.watchlistItem.update({
+            where: { ticker_groupId: { ticker, groupId } },
+            data: {
+                ...(notes !== undefined && { notes }),
+                ...(name !== undefined && { name }),
+            },
+        });
+
+        res.json({ success: true, data: item });
+    } catch (error: any) {
+        if (error.code === 'P2025') {
+            res.status(404).json({ success: false, error: 'Item not found' });
+            return;
+        }
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
 // ── Quick add (add to a list by list id, or default list) ──────────
 export const quickAdd = async (req: Request, res: Response): Promise<void> => {
     try {
-        const { ticker, name, groupId } = req.body;
+        const { ticker, name, groupId, notes } = req.body;
         if (!ticker) {
             res.status(400).json({ success: false, error: 'Ticker is required' });
             return;
@@ -188,6 +214,7 @@ export const quickAdd = async (req: Request, res: Response): Promise<void> => {
                 ticker: ticker.toUpperCase(),
                 name: name || ticker.toUpperCase(),
                 groupId: targetGroupId,
+                ...(notes !== undefined && { notes }),
             },
         });
 
