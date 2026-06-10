@@ -13,7 +13,7 @@ class MassiveApiService {
         this.apiKey = process.env.MASSIVE_API_KEY || '';
         this.client = axios.create({
             baseURL: MASSIVE_BASE_URL,
-            timeout: 30000,
+            timeout: 60000, // Increased to 60s for heavy scanning operations
             params: {
                 apiKey: this.apiKey,
             },
